@@ -1,0 +1,22 @@
+# Lead Magnet Bot Requirements
+# Python 3.11+
+
+# Telegram Bot
+python-telegram-bot==20.7
+
+# Environment
+python-dotenv==1.0.0
+
+# HTTP Client
+httpx[http2]>=0.25.2
+
+# Database (SQLAlchemy + async)
+sqlalchemy==2.0.23
+aiosqlite==0.19.0
+asyncpg>=0.30.0
+
+# Async helpers
+nest_asyncio>=1.6.0
+
+# Utilities
+python-dateutil==2.8.2
