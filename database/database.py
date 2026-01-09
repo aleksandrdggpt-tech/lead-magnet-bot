@@ -34,6 +34,24 @@ if not DATABASE_URL and DEV_MODE:
 
 # Validate DATABASE_URL for production
 if not DATABASE_URL:
+    error_msg = """
+╔══════════════════════════════════════════════════════════════╗
+║  ❌ ОШИБКА: DATABASE_URL не установлен                      ║
+╠══════════════════════════════════════════════════════════════╣
+║                                                              ║
+║  Для Railway:                                                ║
+║  1. Откройте сервис бота в Railway                          ║
+║  2. Перейдите в "Variables"                                 ║
+║  3. Добавьте переменную DATABASE_URL через Reference:        ║
+║     - Name: DATABASE_URL                                    ║
+║     - Value: Reference → выберите PostgreSQL → DATABASE_URL  ║
+║                                                              ║
+║  Или временно для тестирования:                              ║
+║  - Установите DEV_MODE=1 в Variables (использует SQLite)    ║
+║                                                              ║
+╚══════════════════════════════════════════════════════════════╝
+"""
+    logger.critical(error_msg)
     logger.critical("DATABASE_URL is not set and DEV_MODE is disabled. Cannot start bot.")
     raise ValueError("DATABASE_URL environment variable is required. Set DEV_MODE=1 for local SQLite development.")
 
