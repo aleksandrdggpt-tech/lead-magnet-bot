@@ -194,6 +194,19 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     logger.error(f"Exception while handling an update: {error}", exc_info=error)
 
 
+async def post_init(application: Application) -> None:
+    """Инициализация базы данных после создания приложения."""
+    logger.info("🔄 Initializing database...")
+    try:
+        await init_db()
+        logger.info("✅ Database initialized")
+    except Exception as e:
+        logger.critical(f"Failed to initialize database: {e}")
+        import traceback
+        logger.critical(f"Traceback: {traceback.format_exc()}")
+        raise
+
+
 def main():
     """Главная функция приложения."""
     logger.info("=" * 80)
@@ -207,19 +220,14 @@ def main():
         logger.critical(f"Configuration error: {e}")
         return
     
-    # Инициализация базы данных
-    logger.info("🔄 Initializing database...")
-    try:
-        import asyncio
-        asyncio.run(init_db())
-        logger.info("✅ Database initialized")
-    except Exception as e:
-        logger.critical(f"Failed to initialize database: {e}")
-        return
-    
-    # Создание приложения
+    # Создание приложения с post_init callback для инициализации БД
     logger.info("🔄 Creating Telegram Application...")
-    application = Application.builder().token(Config.BOT_TOKEN).build()
+    application = (
+        Application.builder()
+        .token(Config.BOT_TOKEN)
+        .post_init(post_init)
+        .build()
+    )
     
     # Регистрация обработчиков
     logger.info("🔄 Registering handlers...")

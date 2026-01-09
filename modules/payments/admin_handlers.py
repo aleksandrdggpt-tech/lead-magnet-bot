@@ -781,8 +781,7 @@ def register_admin_handlers(application):
         },
         fallbacks=[
             CommandHandler("cancel", cancel_button_command)
-        ],
-        per_message=False
+        ]
     )
     
     application.add_handler(button_management_conversation)
@@ -799,8 +798,7 @@ def register_admin_handlers(application):
         },
         fallbacks=[
             CommandHandler("cancel", cancel_channel_command)
-        ],
-        per_message=False
+        ]
     )
     
     application.add_handler(channel_settings_conversation)
