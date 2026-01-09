@@ -15,9 +15,10 @@ from sqlalchemy import select, func
 from enum import IntEnum
 
 from database.database import get_session
-from database import ChannelButton, ChannelButtonClick
+from database import ChannelButton, ChannelButtonClick, BotSettings
 from services.channel_button_service import ChannelButtonService
 from .keyboards import get_admin_panel_keyboard
+from .subscription import get_subscription_channel
 from config import Config
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,7 @@ class AdminButtonStates(IntEnum):
     WAITING_EXTERNAL_LINK = 3
     WAITING_CHANNEL = 4
     WAITING_POST_CONTENT = 5
+    WAITING_SUBSCRIPTION_CHANNEL = 6  # Для настройки канала подписки
 
 
 # ==================== ADMIN AUTHENTICATION ====================
@@ -55,6 +57,7 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 **Доступные команды:**
 `/admin` - Админ-панель
 `/add_button` - Создать пост с кнопкой
+`/set_channel` - Настроить канал для проверки подписки
 
 Выберите действие ниже:
 """
@@ -103,10 +106,12 @@ async def admin_commands_callback(update: Update, context: ContextTypes.DEFAULT_
 **Основные команды:**
 `/admin` - Админ-панель
 `/add_button` - Создать пост с кнопкой
+`/set_channel` - Настроить канал для проверки подписки
 
 **Действия через меню:**
 • ➕ Создать пост с кнопкой
 • 📊 Статистика по кнопкам
+• ⚙️ Настройки канала
 """
     
     await query.edit_message_text(
@@ -567,6 +572,172 @@ async def cancel_button_command(update: Update, context: ContextTypes.DEFAULT_TY
     return ConversationHandler.END
 
 
+# ==================== CHANNEL SETTINGS ====================
+
+async def set_channel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /set_channel command - настройка канала для проверки подписки."""
+    telegram_id = update.effective_user.id
+    
+    if not is_admin(telegram_id):
+        await update.message.reply_text("❌ У вас нет прав доступа.")
+        return
+    
+    # Получаем текущий канал
+    try:
+        current_channel = await get_subscription_channel()
+        message = f"""
+⚙️ **НАСТРОЙКА КАНАЛА ДЛЯ ПРОВЕРКИ ПОДПИСКИ**
+
+**Текущий канал:** {current_channel}
+
+Отправьте username канала для проверки подписки.
+
+**Формат:**
+• @channel_username
+• channel_username (без @)
+
+**Важно:** Бот должен быть администратором канала для проверки подписки.
+
+Используйте /cancel для отмены.
+"""
+    except Exception as e:
+        logger.error(f"Error getting current channel: {e}")
+        message = """
+⚙️ **НАСТРОЙКА КАНАЛА ДЛЯ ПРОВЕРКИ ПОДПИСКИ**
+
+Отправьте username канала для проверки подписки.
+
+**Формат:**
+• @channel_username
+• channel_username (без @)
+
+**Важно:** Бот должен быть администратором канала для проверки подписки.
+
+Используйте /cancel для отмены.
+"""
+    
+    await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
+    return AdminButtonStates.WAITING_SUBSCRIPTION_CHANNEL
+
+
+async def set_channel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle channel username input for subscription check."""
+    telegram_id = update.effective_user.id
+    
+    if not is_admin(telegram_id):
+        await update.message.reply_text("❌ У вас нет прав доступа.")
+        return ConversationHandler.END
+    
+    channel_input = update.message.text.strip()
+    
+    # Обрабатываем формат канала
+    if channel_input.startswith('@'):
+        channel_username = channel_input
+    else:
+        channel_username = f"@{channel_input}"
+    
+    # Проверяем, что бот может работать с каналом
+    try:
+        # Пытаемся получить информацию о канале
+        chat = await context.bot.get_chat(chat_id=channel_username)
+        
+        # Проверяем, что это канал
+        if chat.type not in ['channel', 'supergroup']:
+            await update.message.reply_text(
+                "❌ Это не канал. Отправьте username канала.\n\n"
+                "Формат: @channel_username или channel_username"
+            )
+            return AdminButtonStates.WAITING_SUBSCRIPTION_CHANNEL
+        
+        # Сохраняем в БД
+        async with get_session() as session:
+            result = await session.execute(
+                select(BotSettings).where(BotSettings.key == "subscription_channel")
+            )
+            setting = result.scalar_one_or_none()
+            
+            if setting:
+                # Обновляем существующую настройку
+                setting.value = channel_username
+                setting.updated_by = telegram_id
+            else:
+                # Создаем новую настройку
+                setting = BotSettings(
+                    key="subscription_channel",
+                    value=channel_username,
+                    updated_by=telegram_id
+                )
+                session.add(setting)
+            
+            await session.commit()
+            logger.info(f"Subscription channel updated to {channel_username} by {telegram_id}")
+        
+        await update.message.reply_text(
+            f"✅ **Канал успешно настроен!**\n\n"
+            f"Канал для проверки подписки: {channel_username}\n\n"
+            f"Теперь бот будет проверять подписку на этот канал.",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        
+    except Exception as e:
+        logger.error(f"Error setting channel: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        await update.message.reply_text(
+            f"❌ Ошибка при настройке канала: {e}\n\n"
+            "Убедитесь, что:\n"
+            "• Бот является администратором канала\n"
+            "• Username канала указан правильно\n"
+            "• Канал существует и доступен"
+        )
+        return AdminButtonStates.WAITING_SUBSCRIPTION_CHANNEL
+    
+    return ConversationHandler.END
+
+
+async def admin_channel_settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show channel settings."""
+    query = update.callback_query
+    await query.answer()
+    
+    telegram_id = query.from_user.id
+    
+    if not is_admin(telegram_id):
+        await query.edit_message_text("❌ Нет прав доступа.")
+        return
+    
+    try:
+        current_channel = await get_subscription_channel()
+        message = f"""
+⚙️ **НАСТРОЙКИ КАНАЛА**
+
+**Текущий канал для проверки подписки:** {current_channel}
+
+Используйте команду `/set_channel` для изменения канала.
+"""
+    except Exception as e:
+        logger.error(f"Error getting channel settings: {e}")
+        message = """
+⚙️ **НАСТРОЙКИ КАНАЛА**
+
+Используйте команду `/set_channel` для настройки канала.
+"""
+    
+    await query.edit_message_text(
+        message,
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("◀️ Назад", callback_data="admin:back")]
+        ])
+    )
+
+
+async def cancel_channel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cancel channel setting."""
+    await update.message.reply_text("❌ Настройка канала отменена.")
+    return ConversationHandler.END
+
+
 # ==================== REGISTER ADMIN HANDLERS ====================
 
 def register_admin_handlers(application):
@@ -584,6 +755,7 @@ def register_admin_handlers(application):
     application.add_handler(CallbackQueryHandler(admin_commands_callback, pattern="^admin:commands$"))
     application.add_handler(CallbackQueryHandler(admin_button_stats_callback, pattern="^admin:button_stats$"))
     application.add_handler(CallbackQueryHandler(admin_back_callback, pattern="^admin:add_button$"))
+    application.add_handler(CallbackQueryHandler(admin_channel_settings_callback, pattern="^admin:channel_settings$"))
     
     # Channel button management command
     button_management_conversation = ConversationHandler(
@@ -614,5 +786,23 @@ def register_admin_handlers(application):
     )
     
     application.add_handler(button_management_conversation)
+    
+    # Channel settings command
+    channel_settings_conversation = ConversationHandler(
+        entry_points=[
+            CommandHandler("set_channel", set_channel_command)
+        ],
+        states={
+            AdminButtonStates.WAITING_SUBSCRIPTION_CHANNEL: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, set_channel_handler)
+            ],
+        },
+        fallbacks=[
+            CommandHandler("cancel", cancel_channel_command)
+        ],
+        per_message=False
+    )
+    
+    application.add_handler(channel_settings_conversation)
     
     logger.info("✅ Admin handlers registered")

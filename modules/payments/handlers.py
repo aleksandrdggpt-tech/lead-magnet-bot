@@ -8,8 +8,8 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CallbackQueryHandler
 
 from database.database import get_session
-from .subscription import check_channel_subscription, get_or_create_user
-from .messages import FREE_ACCESS_CHANNEL
+from .subscription import check_channel_subscription, get_or_create_user, get_subscription_channel
+from .messages import get_free_access_message
 from .keyboards import get_free_access_keyboard
 
 logger = logging.getLogger(__name__)
@@ -31,30 +31,33 @@ async def check_subscription_callback(update: Update, context: ContextTypes.DEFA
 
     try:
         async with get_session() as session:
+            # Получаем канал для проверки
+            channel_username = await get_subscription_channel()
+            
             # Проверяем подписку
             try:
-                is_subscribed = await check_channel_subscription(context.bot, telegram_id)
+                is_subscribed = await check_channel_subscription(context.bot, telegram_id, channel_username)
             except Exception as e:
                 logger.error(f"Error checking channel subscription: {e}")
                 import traceback
                 logger.error(f"Traceback: {traceback.format_exc()}")
                 await query.edit_message_text(
                     "❌ Ошибка при проверке подписки. Попробуйте позже.",
-                    reply_markup=get_free_access_keyboard()
+                    reply_markup=get_free_access_keyboard(channel_username)
                 )
                 return
 
             # Если пользователь не подписан - просим подписаться
             if not is_subscribed:
-                message = """
+                message = f"""
 ❌ **ПОДПИСКА НЕ НАЙДЕНА**
 
 Пожалуйста:
-1. 📢 Подпишитесь на канал @TaktikaKutuzova
+1. 📢 Подпишитесь на канал {channel_username}
 2. ✅ Нажмите "Я подписался" еще раз для проверки
 """
                 try:
-                    await query.edit_message_text(message, reply_markup=get_free_access_keyboard())
+                    await query.edit_message_text(message, reply_markup=get_free_access_keyboard(channel_username))
                 except Exception as edit_error:
                     if "not modified" not in str(edit_error).lower():
                         logger.error(f"Error editing message: {edit_error}")
@@ -110,10 +113,12 @@ async def check_subscription_callback(update: Update, context: ContextTypes.DEFA
         logger.error(f"Unexpected error in check_subscription_callback: {e}")
         import traceback
         logger.error(f"Traceback: {traceback.format_exc()}")
+        # Получаем канал для fallback
         try:
+            channel_username = await get_subscription_channel()
             await query.edit_message_text(
                 "❌ Произошла ошибка при проверке подписки. Попробуйте позже.",
-                reply_markup=get_free_access_keyboard()
+                reply_markup=get_free_access_keyboard(channel_username)
             )
         except Exception as e2:
             if "not modified" not in str(e2).lower():

@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from telegram.error import BadRequest
 from telegram.constants import ChatMemberStatus
 
-from database import User
+from database import User, BotSettings
 from database.database import get_session
 from config import Config
 
@@ -43,21 +43,51 @@ async def get_or_create_user(
     return user
 
 
-async def check_channel_subscription(bot, telegram_id: int) -> bool:
+async def get_subscription_channel() -> str:
+    """
+    Получает канал для проверки подписки из БД или конфига.
+    
+    Returns:
+        str: Username канала (например: @channel_username)
+    """
+    try:
+        async with get_session() as session:
+            result = await session.execute(
+                select(BotSettings).where(BotSettings.key == "subscription_channel")
+            )
+            setting = result.scalar_one_or_none()
+            
+            if setting and setting.value:
+                return setting.value
+            
+            # Fallback на конфиг
+            return Config.CHANNEL_USERNAME
+    except Exception as e:
+        logger.error(f"Error getting subscription channel from DB: {e}")
+        # Fallback на конфиг
+        return Config.CHANNEL_USERNAME
+
+
+async def check_channel_subscription(bot, telegram_id: int, channel_username: Optional[str] = None) -> bool:
     """
     Проверяет, подписан ли пользователь на канал.
 
     Args:
         bot: Экземпляр Telegram бота
         telegram_id: Telegram ID пользователя
+        channel_username: Username канала (опционально, если не указан - берется из БД/конфига)
 
     Returns:
         bool: True если пользователь подписан, False иначе
     """
+    # Получаем канал для проверки
+    if not channel_username:
+        channel_username = await get_subscription_channel()
+    
     try:
         # Используем getChatMember для проверки статуса пользователя в канале
         member = await bot.get_chat_member(
-            chat_id=Config.CHANNEL_USERNAME,
+            chat_id=channel_username,
             user_id=telegram_id
         )
 

@@ -23,9 +23,10 @@ from database.database import init_db, close_db, get_session
 from database import ChannelButton, ChannelButtonClick
 from modules.payments.subscription import (
     get_or_create_user,
-    check_channel_subscription
+    check_channel_subscription,
+    get_subscription_channel
 )
-from modules.payments.messages import FREE_ACCESS_CHANNEL
+from modules.payments.messages import get_free_access_message
 from modules.payments.keyboards import get_free_access_keyboard
 from modules.payments.handlers import register_subscription_handlers
 from modules.payments.admin_handlers import register_admin_handlers
@@ -101,9 +102,12 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     
                     # ВАЖНО: Сразу обрабатываем кнопку канала и выходим
                     if button_link:
+                        # Получаем канал для проверки
+                        channel_username = await get_subscription_channel()
+                        
                         # Проверяем подписку сразу
                         try:
-                            is_subscribed = await check_channel_subscription(context.bot, telegram_id)
+                            is_subscribed = await check_channel_subscription(context.bot, telegram_id, channel_username)
                             logger.info(f"🔵 User {telegram_id} subscription status: {is_subscribed}")
                             
                             if is_subscribed:
@@ -143,8 +147,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             else:
                                 # Пользователь не подписан - показываем диалог проверки подписки
                                 await update.message.reply_text(
-                                    FREE_ACCESS_CHANNEL,
-                                    reply_markup=get_free_access_keyboard(),
+                                    get_free_access_message(channel_username),
+                                    reply_markup=get_free_access_keyboard(channel_username),
                                     parse_mode=ParseMode.MARKDOWN
                                 )
                                 logger.info(f"🔵 User came via channel button but not subscribed, showing subscription check. Link: {button_link}, Type: {button_lead_magnet_type}")
@@ -156,9 +160,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             import traceback
                             logger.error(f"Traceback: {traceback.format_exc()}")
                             # В случае ошибки показываем диалог проверки подписки
+                            channel_username = await get_subscription_channel()
                             await update.message.reply_text(
-                                FREE_ACCESS_CHANNEL,
-                                reply_markup=get_free_access_keyboard(),
+                                get_free_access_message(channel_username),
+                                reply_markup=get_free_access_keyboard(channel_username),
                                 parse_mode=ParseMode.MARKDOWN
                             )
                             elapsed = int((time.perf_counter() - t0) * 1000)

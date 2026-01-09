@@ -63,3 +63,17 @@ class ChannelButtonClick(Base):
 
     def __repr__(self) -> str:
         return f"<ChannelButtonClick(telegram_id={self.telegram_id}, button_id={self.button_id}, clicked_at={self.clicked_at})>"
+
+
+class BotSettings(Base):
+    """Bot settings stored in database."""
+    __tablename__ = "bot_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    key: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
+    value: Mapped[str] = mapped_column(String(500), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_by: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)  # Telegram ID админа
+
+    def __repr__(self) -> str:
+        return f"<BotSettings(key='{self.key}', value='{self.value}')>"
