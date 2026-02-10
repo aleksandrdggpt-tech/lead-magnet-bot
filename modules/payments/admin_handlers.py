@@ -771,25 +771,19 @@ async def set_welcome_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("❌ У вас нет прав доступа.")
         return ConversationHandler.END
     
-    # Показываем текущие настройки (если есть)
+    # Показываем инструкцию (без вывода «сырых» текущих текстов, чтобы избежать экранирования)
     try:
-        current = await get_welcome_settings()
-        message = (
-            "💬 **НАСТРОЙКА ПРИВЕТСТВЕННОГО СООБЩЕНИЯ**\n\n"
-            "**Текущий текст:**\n"
-            f"{current['text']}\n\n"
-            f"**Текст кнопки:** {current['button_text']}\n"
-            f"**Ссылка:** {current['link'] or 'не задана'}\n\n"
-            "Отправьте **новый текст приветствия**.\n\n"
-            "_Используйте /cancel для отмены._"
-        )
+        await get_welcome_settings()  # просто проверяем, что всё работает
     except Exception as e:
         logger.error(f"Error getting welcome settings: {e}")
-        message = (
-            "💬 **НАСТРОЙКА ПРИВЕТСТВЕННОГО СООБЩЕНИЯ**\n\n"
-            "Отправьте **текст приветствия**, который будет показываться при входе в бота.\n\n"
-            "_Используйте /cancel для отмены._"
-        )
+    
+    message = (
+        "💬 **НАСТРОЙКА ПРИВЕТСТВЕННОГО СООБЩЕНИЯ**\n\n"
+        "Шаг 1. Отправьте **текст приветствия**, который будет показываться при входе в бота.\n\n"
+        "Шаг 2. Затем бот попросит **текст кнопки**.\n"
+        "Шаг 3. После этого бот попросит **ссылку на лид-магнит**.\n\n"
+        "_Используйте /cancel для отмены._"
+    )
     
     await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
     return AdminButtonStates.WAITING_WELCOME_TEXT
