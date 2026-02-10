@@ -19,6 +19,7 @@ from database import ChannelButton, ChannelButtonClick, BotSettings
 from services.channel_button_service import ChannelButtonService
 from .keyboards import get_admin_panel_keyboard
 from .subscription import get_subscription_channel
+from .settings import get_welcome_settings, set_welcome_settings
 from config import Config
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,9 @@ class AdminButtonStates(IntEnum):
     WAITING_CHANNEL = 4
     WAITING_POST_CONTENT = 5
     WAITING_SUBSCRIPTION_CHANNEL = 6  # Для настройки канала подписки
+    WAITING_WELCOME_TEXT = 7
+    WAITING_WELCOME_BUTTON_TEXT = 8
+    WAITING_WELCOME_LINK = 9
 
 
 # ==================== ADMIN AUTHENTICATION ====================
@@ -105,13 +109,15 @@ async def admin_commands_callback(update: Update, context: ContextTypes.DEFAULT_
 
 **Основные команды:**
 `/admin` - Админ-панель
-`/add_button` - Создать пост с кнопкой
+`/add_button` - Создать пост с кнопкой в канале
 `/set_channel` - Настроить канал для проверки подписки
+`/set_welcome` - Настроить приветственное сообщение в боте
 
 **Действия через меню:**
 • ➕ Создать пост с кнопкой
 • 📊 Статистика по кнопкам
 • ⚙️ Настройки канала
+• 💬 Настройки приветствия
 """
     
     await query.edit_message_text(
@@ -738,6 +744,159 @@ async def cancel_channel_command(update: Update, context: ContextTypes.DEFAULT_T
     return ConversationHandler.END
 
 
+# ==================== WELCOME MESSAGE SETTINGS ====================
+
+async def set_welcome_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /set_welcome command - настройка приветственного сообщения."""
+    telegram_id = update.effective_user.id
+    
+    if not is_admin(telegram_id):
+        await update.message.reply_text("❌ У вас нет прав доступа.")
+        return ConversationHandler.END
+    
+    # Показываем текущие настройки (если есть)
+    try:
+        current = await get_welcome_settings()
+        message = (
+            "💬 **НАСТРОЙКА ПРИВЕТСТВЕННОГО СООБЩЕНИЯ**\n\n"
+            "**Текущий текст:**\n"
+            f"{current['text']}\n\n"
+            f"**Текст кнопки:** {current['button_text']}\n"
+            f"**Ссылка:** {current['link'] or 'не задана'}\n\n"
+            "Отправьте **новый текст приветствия**.\n\n"
+            "_Используйте /cancel для отмены._"
+        )
+    except Exception as e:
+        logger.error(f"Error getting welcome settings: {e}")
+        message = (
+            "💬 **НАСТРОЙКА ПРИВЕТСТВЕННОГО СООБЩЕНИЯ**\n\n"
+            "Отправьте **текст приветствия**, который будет показываться при входе в бота.\n\n"
+            "_Используйте /cancel для отмены._"
+        )
+    
+    await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
+    return AdminButtonStates.WAITING_WELCOME_TEXT
+
+
+async def set_welcome_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Сохраняем текст приветствия и спрашиваем текст кнопки."""
+    telegram_id = update.effective_user.id
+    
+    if not is_admin(telegram_id):
+        await update.message.reply_text("❌ У вас нет прав доступа.")
+        return ConversationHandler.END
+    
+    text = update.message.text.strip()
+    if not text:
+        await update.message.reply_text("❌ Текст приветствия не может быть пустым. Отправьте текст еще раз.")
+        return AdminButtonStates.WAITING_WELCOME_TEXT
+    
+    context.user_data["welcome_text"] = text
+    
+    await update.message.reply_text(
+        "✅ Текст приветствия сохранен!\n\n"
+        "Теперь отправьте **текст кнопки**.\n\n"
+        "Например: \"📋 Получить чек-лист отдела продаж\"",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return AdminButtonStates.WAITING_WELCOME_BUTTON_TEXT
+
+
+async def set_welcome_button_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Сохраняем текст кнопки и спрашиваем ссылку."""
+    telegram_id = update.effective_user.id
+    
+    if not is_admin(telegram_id):
+        await update.message.reply_text("❌ У вас нет прав доступа.")
+        return ConversationHandler.END
+    
+    button_text = update.message.text.strip()
+    if not button_text:
+        await update.message.reply_text("❌ Текст кнопки не может быть пустым. Отправьте текст еще раз.")
+        return AdminButtonStates.WAITING_WELCOME_BUTTON_TEXT
+    
+    context.user_data["welcome_button_text"] = button_text
+    
+    await update.message.reply_text(
+        "✅ Текст кнопки сохранен!\n\n"
+        "Теперь отправьте **ссылку на чек-лист** или другой лид-магнит.\n\n"
+        "Ссылка должна начинаться с http:// или https://",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return AdminButtonStates.WAITING_WELCOME_LINK
+
+
+async def set_welcome_link_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Сохраняем ссылку и записываем все настройки в БД."""
+    telegram_id = update.effective_user.id
+    
+    if not is_admin(telegram_id):
+        await update.message.reply_text("❌ У вас нет прав доступа.")
+        return ConversationHandler.END
+    
+    link = update.message.text.strip()
+    if not (link.startswith("http://") or link.startswith("https://")):
+        await update.message.reply_text(
+            "❌ Неверный формат ссылки. Отправьте полную ссылку, начинающуюся с http:// или https://"
+        )
+        return AdminButtonStates.WAITING_WELCOME_LINK
+    
+    text = context.user_data.get("welcome_text")
+    button_text = context.user_data.get("welcome_button_text")
+    
+    if not text or not button_text:
+        await update.message.reply_text("❌ Ошибка: данные приветствия потеряны. Попробуйте еще раз с /set_welcome.")
+        return ConversationHandler.END
+    
+    # Сохраняем в БД
+    await set_welcome_settings(text=text, button_text=button_text, link=link, updated_by=telegram_id)
+    
+    # Очищаем временные данные
+    context.user_data.pop("welcome_text", None)
+    context.user_data.pop("welcome_button_text", None)
+    
+    await update.message.reply_text(
+        "✅ **Приветственное сообщение обновлено!**\n\n"
+        "Теперь при входе в бота пользователи будут видеть новый текст и кнопку.",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return ConversationHandler.END
+
+
+async def admin_welcome_settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает текущие настройки приветствия."""
+    query = update.callback_query
+    await query.answer()
+    
+    telegram_id = query.from_user.id
+    if not is_admin(telegram_id):
+        await query.edit_message_text("❌ Нет прав доступа.")
+        return
+    
+    try:
+        current = await get_welcome_settings()
+        message = (
+            "💬 **НАСТРОЙКИ ПРИВЕТСТВИЯ**\n\n"
+            "**Текущий текст:**\n"
+            f"{current['text']}\n\n"
+            f"**Текст кнопки:** {current['button_text']}\n"
+            f"**Ссылка:** {current['link'] or 'не задана'}\n\n"
+            "Используйте команду `/set_welcome` для изменения.",
+        )
+    except Exception as e:
+        logger.error(f"Error loading welcome settings: {e}")
+        message = (
+            "💬 **НАСТРОЙКИ ПРИВЕТСТВИЯ**\n\n"
+            "Используйте команду `/set_welcome` для задания приветственного текста и кнопки."
+        )
+    
+    await query.edit_message_text(
+        message,
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад", callback_data="admin:back")]]),
+    )
+
+
 # ==================== REGISTER ADMIN HANDLERS ====================
 
 def register_admin_handlers(application):
@@ -756,6 +915,7 @@ def register_admin_handlers(application):
     application.add_handler(CallbackQueryHandler(admin_button_stats_callback, pattern="^admin:button_stats$"))
     application.add_handler(CallbackQueryHandler(admin_back_callback, pattern="^admin:add_button$"))
     application.add_handler(CallbackQueryHandler(admin_channel_settings_callback, pattern="^admin:channel_settings$"))
+    application.add_handler(CallbackQueryHandler(admin_welcome_settings_callback, pattern="^admin:welcome_settings$"))
     
     # Channel button management command
     button_management_conversation = ConversationHandler(
@@ -802,5 +962,28 @@ def register_admin_handlers(application):
     )
     
     application.add_handler(channel_settings_conversation)
+    
+    # Welcome settings command
+    welcome_settings_conversation = ConversationHandler(
+        entry_points=[
+            CommandHandler("set_welcome", set_welcome_command)
+        ],
+        states={
+            AdminButtonStates.WAITING_WELCOME_TEXT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, set_welcome_text_handler)
+            ],
+            AdminButtonStates.WAITING_WELCOME_BUTTON_TEXT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, set_welcome_button_text_handler)
+            ],
+            AdminButtonStates.WAITING_WELCOME_LINK: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, set_welcome_link_handler)
+            ],
+        },
+        fallbacks=[
+            CommandHandler("cancel", cancel_channel_command)
+        ]
+    )
+    
+    application.add_handler(welcome_settings_conversation)
     
     logger.info("✅ Admin handlers registered")

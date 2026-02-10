@@ -34,6 +34,7 @@ def get_admin_panel_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("➕ Создать пост с кнопкой", callback_data="admin:add_button")],
         [InlineKeyboardButton("📊 Статистика по кнопкам", callback_data="admin:button_stats")],
         [InlineKeyboardButton("⚙️ Настройки канала", callback_data="admin:channel_settings")],
+        [InlineKeyboardButton("💬 Настройки приветствия", callback_data="admin:welcome_settings")],
         [InlineKeyboardButton("📝 Список команд", callback_data="admin:commands")]
     ]
     return InlineKeyboardMarkup(keyboard)

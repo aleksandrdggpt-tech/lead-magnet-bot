@@ -30,6 +30,7 @@ from modules.payments.messages import get_free_access_message
 from modules.payments.keyboards import get_free_access_keyboard
 from modules.payments.handlers import register_subscription_handlers
 from modules.payments.admin_handlers import register_admin_handlers
+from modules.payments.settings import get_welcome_settings
 
 # Настройка логирования
 logging.basicConfig(
@@ -174,14 +175,35 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 import traceback
                 logger.error(f"Traceback: {traceback.format_exc()}")
     else:
-        logger.info(f"🚀 Команда /start вызвана пользователем {telegram_id}")
+        logger.info(f"🚀 Команда /start вызвана пользователем {telegram_id} без параметров")
+        # Создаем/обновляем пользователя при обычном входе в бота
+        try:
+            async with get_session() as session:
+                await get_or_create_user(
+                    telegram_id,
+                    session,
+                    username=update.effective_user.username,
+                    first_name=update.effective_user.first_name,
+                )
+        except Exception as e:
+            logger.error(f"Error creating user on plain /start: {e}")
     
-    # Обычный /start без параметров - просто приветствие
+    # Обычный /start без параметров - приветственное сообщение с кнопкой
+    welcome = await get_welcome_settings()
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    welcome["button_text"],
+                    callback_data="welcome:get_checklist",
+                )
+            ]
+        ]
+    )
     await update.message.reply_text(
-        "👋 Добро пожаловать!\n\n"
-        "Этот бот раздает лид-магниты через кнопки в канале.\n\n"
-        "Перейдите по кнопке в канале, чтобы получить доступ к материалам.",
-        parse_mode=ParseMode.MARKDOWN
+        welcome["text"],
+        reply_markup=keyboard,
+        parse_mode=ParseMode.MARKDOWN,
     )
     
     elapsed = int((time.perf_counter() - t0) * 1000)

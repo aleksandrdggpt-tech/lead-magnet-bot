@@ -28,6 +28,14 @@ class Config:
     # Канал для проверки подписки
     CHANNEL_USERNAME: str = os.getenv('CHANNEL_USERNAME', '@TaktikaKutuzova')
 
+    # Ссылки на страницы оплаты (используются во follow-up сообщении)
+    PAYMENT_URL_1: str = os.getenv('PAYMENT_URL_1', '')
+    PAYMENT_URL_2: str = os.getenv('PAYMENT_URL_2', '')
+    PAYMENT_URL_3: str = os.getenv('PAYMENT_URL_3', '')
+
+    # Час отправки follow-up сообщения (0-23, по времени сервера)
+    FOLLOWUP_HOUR: int = int(os.getenv('FOLLOWUP_HOUR', '11'))
+
     @classmethod
     def validate(cls) -> None:
         """Проверяет критичные параметры конфигурации."""
