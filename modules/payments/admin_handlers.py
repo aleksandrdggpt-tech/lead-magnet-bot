@@ -19,7 +19,14 @@ from database import ChannelButton, ChannelButtonClick, BotSettings
 from services.channel_button_service import ChannelButtonService
 from .keyboards import get_admin_panel_keyboard
 from .subscription import get_subscription_channel
-from .settings import get_welcome_settings, set_welcome_settings
+from .settings import (
+    get_welcome_settings,
+    set_welcome_settings,
+    get_followup_lost_text,
+    set_followup_lost_text,
+    get_followup_lead_settings,
+    set_followup_lead_settings,
+)
 from config import Config
 
 logger = logging.getLogger(__name__)
@@ -36,6 +43,14 @@ class AdminButtonStates(IntEnum):
     WAITING_WELCOME_TEXT = 7
     WAITING_WELCOME_BUTTON_TEXT = 8
     WAITING_WELCOME_LINK = 9
+    WAITING_FOLLOWUP_LOST_TEXT = 10
+    WAITING_FOLLOWUP_LEAD_TEXT = 11
+    WAITING_FOLLOWUP_LEAD_BTN1_TEXT = 12
+    WAITING_FOLLOWUP_LEAD_BTN1_URL = 13
+    WAITING_FOLLOWUP_LEAD_BTN2_TEXT = 14
+    WAITING_FOLLOWUP_LEAD_BTN2_URL = 15
+    WAITING_FOLLOWUP_LEAD_BTN3_TEXT = 16
+    WAITING_FOLLOWUP_LEAD_BTN3_URL = 17
 
 
 # ==================== ADMIN AUTHENTICATION ====================
@@ -112,6 +127,8 @@ async def admin_commands_callback(update: Update, context: ContextTypes.DEFAULT_
 `/add_button` - Создать пост с кнопкой в канале
 `/set_channel` - Настроить канал для проверки подписки
 `/set_welcome` - Настроить приветственное сообщение в боте
+`/set_followup_lost` - Настроить follow-up для неподписавшихся
+`/set_followup_lead` - Настроить follow-up для подписавшихся
 
 **Действия через меню:**
 • ➕ Создать пост с кнопкой
@@ -863,6 +880,275 @@ async def set_welcome_link_handler(update: Update, context: ContextTypes.DEFAULT
     return ConversationHandler.END
 
 
+# ==================== FOLLOW-UP SETTINGS ====================
+
+async def set_followup_lost_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /set_followup_lost - текст для неподписавшихся."""
+    telegram_id = update.effective_user.id
+    
+    if not is_admin(telegram_id):
+        await update.message.reply_text("❌ У вас нет прав доступа.")
+        return ConversationHandler.END
+    
+    try:
+        current_text = await get_followup_lost_text()
+        message = (
+            "♻️ **НАСТРОЙКА FOLLOW-UP ДЛЯ НЕПОДПИСАВШИХСЯ (lost)**\n\n"
+            "**Текущий текст:**\n"
+            f"{current_text}\n\n"
+            "Отправьте **новый текст сообщения**, которое будет приходить на следующий день "
+            "тем, кто нажал на лид-магнит, но так и не подписался на канал.\n\n"
+            "_Используйте /cancel для отмены._"
+        )
+    except Exception as e:
+        logger.error(f"Error getting followup_lost_text: {e}")
+        message = (
+            "♻️ **НАСТРОЙКА FOLLOW-UP ДЛЯ НЕПОДПИСАВШИХСЯ (lost)**\n\n"
+            "Отправьте **текст сообщения**, которое будет приходить на следующий день тем, "
+            "кто нажал на лид-магнит, но так и не подписался на канал.\n\n"
+            "_Используйте /cancel для отмены._"
+        )
+    
+    await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
+    return AdminButtonStates.WAITING_FOLLOWUP_LOST_TEXT
+
+
+async def set_followup_lost_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Сохраняет текст follow-up для неподписанных."""
+    telegram_id = update.effective_user.id
+    
+    if not is_admin(telegram_id):
+        await update.message.reply_text("❌ У вас нет прав доступа.")
+        return ConversationHandler.END
+    
+    text = update.message.text.strip()
+    if not text:
+        await update.message.reply_text("❌ Текст не может быть пустым. Отправьте текст еще раз.")
+        return AdminButtonStates.WAITING_FOLLOWUP_LOST_TEXT
+    
+    await set_followup_lost_text(text, updated_by=telegram_id)
+    await update.message.reply_text(
+        "✅ **Текст follow-up для неподписавшихся обновлён!**",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return ConversationHandler.END
+
+
+async def set_followup_lead_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /set_followup_lead - текст и кнопки для подписавшихся."""
+    telegram_id = update.effective_user.id
+    
+    if not is_admin(telegram_id):
+        await update.message.reply_text("❌ У вас нет прав доступа.")
+        return ConversationHandler.END
+    
+    try:
+        current = await get_followup_lead_settings()
+        btn_lines = "\n".join(
+            [f"- {btn['text']}: {btn['url']}" for btn in current["buttons"]]
+        ) or "кнопки не настроены"
+        message = (
+            "💰 **НАСТРОЙКА FOLLOW-UP ДЛЯ ПОДПИСАВШИХСЯ (lead)**\n\n"
+            "**Текущий текст:**\n"
+            f"{current['text']}\n\n"
+            "**Текущие кнопки:**\n"
+            f"{btn_lines}\n\n"
+            "Сначала отправьте **новый продающий текст** сообщения.\n\n"
+            "_После этого бот по очереди попросит тексты и ссылки для до 3 кнопок._\n\n"
+            "_Используйте /cancel для отмены._"
+        )
+    except Exception as e:
+        logger.error(f"Error getting followup_lead_settings: {e}")
+        message = (
+            "💰 **НАСТРОЙКА FOLLOW-UP ДЛЯ ПОДПИСАВШИХСЯ (lead)**\n\n"
+            "Сначала отправьте **продающий текст** сообщения.\n\n"
+            "_После этого бот по очереди попросит тексты и ссылки для до 3 кнопок._\n\n"
+            "_Используйте /cancel для отмены._"
+        )
+    
+    await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
+    return AdminButtonStates.WAITING_FOLLOWUP_LEAD_TEXT
+
+
+async def set_followup_lead_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Сохраняет текст follow-up lead и запрашивает кнопку 1."""
+    telegram_id = update.effective_user.id
+    
+    if not is_admin(telegram_id):
+        await update.message.reply_text("❌ У вас нет прав доступа.")
+        return ConversationHandler.END
+    
+    text = update.message.text.strip()
+    if not text:
+        await update.message.reply_text("❌ Текст не может быть пустым. Отправьте текст еще раз.")
+        return AdminButtonStates.WAITING_FOLLOWUP_LEAD_TEXT
+    
+    context.user_data["followup_lead_text"] = text
+    
+    await update.message.reply_text(
+        "✅ Текст сохранен!\n\n"
+        "Теперь отправьте **текст первой кнопки** (например, название тарифа).\n\n"
+        "Если вы хотите пропустить эту кнопку, отправьте один дефис: `-`",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return AdminButtonStates.WAITING_FOLLOWUP_LEAD_BTN1_TEXT
+
+
+async def _process_button_text(
+    update: Update,
+    state_text: str,
+    next_state_url: AdminButtonStates,
+    storage_key: str,
+):
+    text = update.message.text.strip()
+    if text == "-":
+        update.message.text = ""  # для последующей логики
+        text = ""
+    context = update._bot._application.context_types.context  # not used, avoid
+
+
+async def set_followup_lead_btn1_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Текст кнопки 1."""
+    text = update.message.text.strip()
+    if text == "-":
+        text = ""
+    context.user_data["followup_lead_btn1_text"] = text
+    await update.message.reply_text(
+        "Теперь отправьте **ссылку для первой кнопки** "
+        "(или `-`, чтобы пропустить эту кнопку).",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return AdminButtonStates.WAITING_FOLLOWUP_LEAD_BTN1_URL
+
+
+async def set_followup_lead_btn1_url_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """URL кнопки 1."""
+    url = update.message.text.strip()
+    if url == "-":
+        url = ""
+    elif url and not (url.startswith("http://") or url.startswith("https://")):
+        await update.message.reply_text(
+            "❌ Неверный формат ссылки. Отправьте полную ссылку (http:// или https://) "
+            "или `-`, чтобы пропустить кнопку."
+        )
+        return AdminButtonStates.WAITING_FOLLOWUP_LEAD_BTN1_URL
+    context.user_data["followup_lead_btn1_url"] = url
+    
+    await update.message.reply_text(
+        "Теперь отправьте **текст второй кнопки** (или `-`, чтобы пропустить).",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return AdminButtonStates.WAITING_FOLLOWUP_LEAD_BTN2_TEXT
+
+
+async def set_followup_lead_btn2_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    if text == "-":
+        text = ""
+    context.user_data["followup_lead_btn2_text"] = text
+    await update.message.reply_text(
+        "Теперь отправьте **ссылку для второй кнопки** "
+        "(или `-`, чтобы пропустить эту кнопку).",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return AdminButtonStates.WAITING_FOLLOWUP_LEAD_BTN2_URL
+
+
+async def set_followup_lead_btn2_url_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    url = update.message.text.strip()
+    if url == "-":
+        url = ""
+    elif url and not (url.startswith("http://") or url.startswith("https://")):
+        await update.message.reply_text(
+            "❌ Неверный формат ссылки. Отправьте полную ссылку (http:// или https://) "
+            "или `-`, чтобы пропустить кнопку."
+        )
+        return AdminButtonStates.WAITING_FOLLOWUP_LEAD_BTN2_URL
+    context.user_data["followup_lead_btn2_url"] = url
+    
+    await update.message.reply_text(
+        "Теперь отправьте **текст третьей кнопки** (или `-`, чтобы пропустить).",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return AdminButtonStates.WAITING_FOLLOWUP_LEAD_BTN3_TEXT
+
+
+async def set_followup_lead_btn3_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    if text == "-":
+        text = ""
+    context.user_data["followup_lead_btn3_text"] = text
+    await update.message.reply_text(
+        "Теперь отправьте **ссылку для третьей кнопки** "
+        "(или `-`, чтобы пропустить эту кнопку).",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return AdminButtonStates.WAITING_FOLLOWUP_LEAD_BTN3_URL
+
+
+async def set_followup_lead_btn3_url_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Финальный шаг — URL третьей кнопки и сохранение всех настроек."""
+    telegram_id = update.effective_user.id
+    
+    if not is_admin(telegram_id):
+        await update.message.reply_text("❌ У вас нет прав доступа.")
+        return ConversationHandler.END
+    
+    url = update.message.text.strip()
+    if url == "-":
+        url = ""
+    elif url and not (url.startswith("http://") or url.startswith("https://")):
+        await update.message.reply_text(
+            "❌ Неверный формат ссылки. Отправьте полную ссылку (http:// или https://) "
+            "или `-`, чтобы пропустить кнопку."
+        )
+        return AdminButtonStates.WAITING_FOLLOWUP_LEAD_BTN3_URL
+    context.user_data["followup_lead_btn3_url"] = url
+    
+    text = context.user_data.get("followup_lead_text", "")
+    btn1_text = context.user_data.get("followup_lead_btn1_text", "")
+    btn1_url = context.user_data.get("followup_lead_btn1_url", "")
+    btn2_text = context.user_data.get("followup_lead_btn2_text", "")
+    btn2_url = context.user_data.get("followup_lead_btn2_url", "")
+    btn3_text = context.user_data.get("followup_lead_btn3_text", "")
+    btn3_url = context.user_data.get("followup_lead_btn3_url", "")
+    
+    if not text:
+        await update.message.reply_text(
+            "❌ Ошибка: текст сообщения потерян. Попробуйте еще раз с /set_followup_lead."
+        )
+        return ConversationHandler.END
+    
+    await set_followup_lead_settings(
+        text=text,
+        btn1_text=btn1_text,
+        btn1_url=btn1_url,
+        btn2_text=btn2_text,
+        btn2_url=btn2_url,
+        btn3_text=btn3_text,
+        btn3_url=btn3_url,
+        updated_by=telegram_id,
+    )
+    
+    # Чистим временные данные
+    for key in [
+        "followup_lead_text",
+        "followup_lead_btn1_text",
+        "followup_lead_btn1_url",
+        "followup_lead_btn2_text",
+        "followup_lead_btn2_url",
+        "followup_lead_btn3_text",
+        "followup_lead_btn3_url",
+    ]:
+        context.user_data.pop(key, None)
+    
+    await update.message.reply_text(
+        "✅ **Follow-up для подписавшихся обновлён!**",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return ConversationHandler.END
+
+
 async def admin_welcome_settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показывает текущие настройки приветствия."""
     query = update.callback_query
@@ -963,6 +1249,22 @@ def register_admin_handlers(application):
     
     application.add_handler(channel_settings_conversation)
     
+    # Follow-up lost command
+    followup_lost_conversation = ConversationHandler(
+        entry_points=[
+            CommandHandler("set_followup_lost", set_followup_lost_command)
+        ],
+        states={
+            AdminButtonStates.WAITING_FOLLOWUP_LOST_TEXT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, set_followup_lost_text_handler)
+            ],
+        },
+        fallbacks=[
+            CommandHandler("cancel", cancel_channel_command)
+        ],
+    )
+    application.add_handler(followup_lost_conversation)
+
     # Welcome settings command
     welcome_settings_conversation = ConversationHandler(
         entry_points=[
@@ -981,7 +1283,7 @@ def register_admin_handlers(application):
         },
         fallbacks=[
             CommandHandler("cancel", cancel_channel_command)
-        ]
+        ],
     )
     
     application.add_handler(welcome_settings_conversation)

@@ -18,7 +18,11 @@ from .subscription import (
 )
 from .messages import get_free_access_message
 from .keyboards import get_free_access_keyboard
-from .settings import get_welcome_settings
+from .settings import (
+    get_welcome_settings,
+    get_followup_lost_text,
+    get_followup_lead_settings,
+)
 from config import Config
 
 logger = logging.getLogger(__name__)
@@ -349,37 +353,19 @@ async def send_lead_followup_job(context: ContextTypes.DEFAULT_TYPE) -> None:
             return
 
         if is_subscribed:
-            # Сценарий 1: подписан — продающее сообщение + 3 кнопки оплаты
-            payment_buttons = []
-            if Config.PAYMENT_URL_1:
-                payment_buttons.append(
-                    [InlineKeyboardButton("💳 Тариф 1", url=Config.PAYMENT_URL_1)]
-                )
-            if Config.PAYMENT_URL_2:
-                payment_buttons.append(
-                    [InlineKeyboardButton("💳 Тариф 2", url=Config.PAYMENT_URL_2)]
-                )
-            if Config.PAYMENT_URL_3:
-                payment_buttons.append(
-                    [InlineKeyboardButton("💳 Тариф 3", url=Config.PAYMENT_URL_3)]
-                )
-
-            if not payment_buttons:
-                logger.warning(
-                    "No PAYMENT_URL_* configured, skipping follow-up payment message"
-                )
+            # Сценарий 1: подписан — продающее сообщение + кнопки оплаты из настроек
+            lead_settings = await get_followup_lead_settings()
+            if not lead_settings["buttons"]:
+                logger.warning("No follow-up lead buttons configured, skipping message")
                 return
 
-            keyboard = InlineKeyboardMarkup(payment_buttons)
-            text = (
-                "🔥 **Как использовать чек-лист, чтобы выжать максимум из отдела продаж**\n\n"
-                "За последний день ты уже получил чек-лист. Следующий логичный шаг — "
-                "внедрить его с нашей помощью и получить результат быстрее:\n\n"
-                "1️⃣ Индивидуальный разбор и план внедрения\n"
-                "2️⃣ Сопровождение по шагам\n"
-                "3️⃣ Ответы на вопросы и разбор кейсов\n\n"
-                "Выбери удобный формат работы ниже 👇"
+            keyboard = InlineKeyboardMarkup(
+                [
+                    [InlineKeyboardButton(btn["text"], url=btn["url"])]
+                    for btn in lead_settings["buttons"]
+                ]
             )
+            text = lead_settings["text"]
 
             await context.bot.send_message(
                 chat_id=telegram_id,
@@ -390,12 +376,7 @@ async def send_lead_followup_job(context: ContextTypes.DEFAULT_TYPE) -> None:
             logger.info(f"Sent subscribed follow-up to user {telegram_id}")
         else:
             # Сценарий 2: не подписан — повторное предложение получить лид-магнит
-            reminder_text = (
-                "👋 Привет! Вчера ты начинал получать чек-лист отдела продаж, но не завершил шаг "
-                "с подпиской на канал.\n\n"
-                "Подпишись на канал, чтобы открыть доступ к материалу, и нажми кнопку ниже, "
-                "чтобы получить чек-лист."
-            )
+            reminder_text = await get_followup_lost_text()
             keyboard = InlineKeyboardMarkup(
                 [
                     [
