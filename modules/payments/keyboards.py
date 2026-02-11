@@ -35,6 +35,8 @@ def get_admin_panel_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("📊 Статистика по кнопкам", callback_data="admin:button_stats")],
         [InlineKeyboardButton("⚙️ Настройки канала", callback_data="admin:channel_settings")],
         [InlineKeyboardButton("💬 Настройки приветствия", callback_data="admin:welcome_settings")],
+        [InlineKeyboardButton("📩 Follow-up (неподписавшиеся)", callback_data="admin:followup_lost_settings")],
+        [InlineKeyboardButton("📩 Follow-up (подписавшиеся)", callback_data="admin:followup_lead_settings")],
         [InlineKeyboardButton("📝 Список команд", callback_data="admin:commands")]
     ]
     return InlineKeyboardMarkup(keyboard)

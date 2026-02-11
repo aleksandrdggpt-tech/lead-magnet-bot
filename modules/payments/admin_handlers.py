@@ -1144,7 +1144,7 @@ async def set_followup_lead_btn3_url_handler(update: Update, context: ContextTyp
 
 
 async def admin_welcome_settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показывает текущие настройки приветствия."""
+    """Показывает краткую сводку и кнопку «Изменить», которая запускает тот же поток, что и /set_welcome."""
     query = update.callback_query
     await query.answer()
     
@@ -1155,26 +1155,152 @@ async def admin_welcome_settings_callback(update: Update, context: ContextTypes.
     
     try:
         current = await get_welcome_settings()
+        link_status = "задана" if current.get("link") else "не задана"
         message = (
             "💬 **НАСТРОЙКИ ПРИВЕТСТВИЯ**\n\n"
-            "**Текущий текст:**\n"
-            f"{current['text']}\n\n"
             f"**Текст кнопки:** {current['button_text']}\n"
-            f"**Ссылка:** {current['link'] or 'не задана'}\n\n"
-            "Используйте команду `/set_welcome` для изменения.",
+            f"**Ссылка:** {link_status}\n\n"
+            "Нажмите кнопку ниже, чтобы изменить текст приветствия, кнопку и ссылку."
         )
     except Exception as e:
         logger.error(f"Error loading welcome settings: {e}")
         message = (
             "💬 **НАСТРОЙКИ ПРИВЕТСТВИЯ**\n\n"
-            "Используйте команду `/set_welcome` для задания приветственного текста и кнопки."
+            "Нажмите кнопку ниже, чтобы задать приветствие и кнопку."
         )
     
     await query.edit_message_text(
         message,
         parse_mode=ParseMode.MARKDOWN,
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад", callback_data="admin:back")]]),
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("✏️ Изменить приветствие", callback_data="admin:start_set_welcome")],
+            [InlineKeyboardButton("◀️ Назад", callback_data="admin:back")],
+        ]),
     )
+
+
+async def start_set_welcome_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Entry point из админ-меню: тот же поток, что и /set_welcome."""
+    query = update.callback_query
+    await query.answer()
+    
+    telegram_id = query.from_user.id
+    if not is_admin(telegram_id):
+        await query.edit_message_text("❌ Нет прав доступа.")
+        return ConversationHandler.END
+    
+    message = (
+        "💬 **НАСТРОЙКА ПРИВЕТСТВЕННОГО СООБЩЕНИЯ**\n\n"
+        "Шаг 1. Отправьте **текст приветствия**, который будет показываться при входе в бота.\n\n"
+        "Шаг 2. Затем бот попросит **текст кнопки**.\n"
+        "Шаг 3. После этого бот попросит **ссылку на лид-магнит**.\n\n"
+        "_Используйте /cancel для отмены._"
+    )
+    
+    await query.edit_message_text(message, parse_mode=ParseMode.MARKDOWN)
+    return AdminButtonStates.WAITING_WELCOME_TEXT
+
+
+async def admin_followup_lost_settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Экран настроек follow-up для неподписавшихся: краткая сводка и кнопка «Изменить»."""
+    query = update.callback_query
+    await query.answer()
+    telegram_id = query.from_user.id
+    if not is_admin(telegram_id):
+        await query.edit_message_text("❌ Нет прав доступа.")
+        return
+    try:
+        current_text = await get_followup_lost_text()
+        status = "задан" if (current_text and current_text.strip()) else "не задан"
+        message = (
+            "♻️ **FOLLOW-UP ДЛЯ НЕПОДПИСАВШИХСЯ**\n\n"
+            f"Текст сообщения: **{status}**\n\n"
+            "Нажмите кнопку ниже, чтобы изменить текст."
+        )
+    except Exception as e:
+        logger.error(f"Error loading followup_lost: {e}")
+        message = (
+            "♻️ **FOLLOW-UP ДЛЯ НЕПОДПИСАВШИХСЯ**\n\n"
+            "Нажмите кнопку ниже, чтобы задать текст сообщения на следующий день."
+        )
+    await query.edit_message_text(
+        message,
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("✏️ Изменить текст", callback_data="admin:start_set_followup_lost")],
+            [InlineKeyboardButton("◀️ Назад", callback_data="admin:back")],
+        ]),
+    )
+
+
+async def admin_followup_lead_settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Экран настроек follow-up для подписавшихся: краткая сводка и кнопка «Изменить»."""
+    query = update.callback_query
+    await query.answer()
+    telegram_id = query.from_user.id
+    if not is_admin(telegram_id):
+        await query.edit_message_text("❌ Нет прав доступа.")
+        return
+    try:
+        current = await get_followup_lead_settings()
+        text_ok = bool(current.get("text") and current["text"].strip())
+        buttons_count = len([b for b in current.get("buttons", []) if b.get("text") or b.get("url")])
+        message = (
+            "💰 **FOLLOW-UP ДЛЯ ПОДПИСАВШИХСЯ**\n\n"
+            f"Текст: **{'задан' if text_ok else 'не задан'}**\n"
+            f"Кнопок: **{buttons_count}**\n\n"
+            "Нажмите кнопку ниже, чтобы изменить текст и кнопки."
+        )
+    except Exception as e:
+        logger.error(f"Error loading followup_lead: {e}")
+        message = (
+            "💰 **FOLLOW-UP ДЛЯ ПОДПИСАВШИХСЯ**\n\n"
+            "Нажмите кнопку ниже, чтобы задать текст и до 3 кнопок."
+        )
+    await query.edit_message_text(
+        message,
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("✏️ Изменить настройки", callback_data="admin:start_set_followup_lead")],
+            [InlineKeyboardButton("◀️ Назад", callback_data="admin:back")],
+        ]),
+    )
+
+
+async def start_set_followup_lost_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Entry point из админ-меню: тот же поток, что и /set_followup_lost."""
+    query = update.callback_query
+    await query.answer()
+    telegram_id = query.from_user.id
+    if not is_admin(telegram_id):
+        await query.edit_message_text("❌ Нет прав доступа.")
+        return ConversationHandler.END
+    message = (
+        "♻️ **НАСТРОЙКА FOLLOW-UP ДЛЯ НЕПОДПИСАВШИХСЯ**\n\n"
+        "Отправьте **текст сообщения**, которое будет приходить на следующий день тем, "
+        "кто нажал на лид-магнит, но так и не подписался на канал.\n\n"
+        "_Используйте /cancel для отмены._"
+    )
+    await query.edit_message_text(message, parse_mode=ParseMode.MARKDOWN)
+    return AdminButtonStates.WAITING_FOLLOWUP_LOST_TEXT
+
+
+async def start_set_followup_lead_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Entry point из админ-меню: тот же поток, что и /set_followup_lead."""
+    query = update.callback_query
+    await query.answer()
+    telegram_id = query.from_user.id
+    if not is_admin(telegram_id):
+        await query.edit_message_text("❌ Нет прав доступа.")
+        return ConversationHandler.END
+    message = (
+        "💰 **НАСТРОЙКА FOLLOW-UP ДЛЯ ПОДПИСАВШИХСЯ**\n\n"
+        "Сначала отправьте **продающий текст** сообщения.\n\n"
+        "После этого бот по очереди попросит тексты и ссылки для до 3 кнопок.\n\n"
+        "_Используйте /cancel для отмены._"
+    )
+    await query.edit_message_text(message, parse_mode=ParseMode.MARKDOWN)
+    return AdminButtonStates.WAITING_FOLLOWUP_LEAD_TEXT
 
 
 # ==================== REGISTER ADMIN HANDLERS ====================
@@ -1196,6 +1322,8 @@ def register_admin_handlers(application):
     application.add_handler(CallbackQueryHandler(admin_back_callback, pattern="^admin:add_button$"))
     application.add_handler(CallbackQueryHandler(admin_channel_settings_callback, pattern="^admin:channel_settings$"))
     application.add_handler(CallbackQueryHandler(admin_welcome_settings_callback, pattern="^admin:welcome_settings$"))
+    application.add_handler(CallbackQueryHandler(admin_followup_lost_settings_callback, pattern="^admin:followup_lost_settings$"))
+    application.add_handler(CallbackQueryHandler(admin_followup_lead_settings_callback, pattern="^admin:followup_lead_settings$"))
     
     # Channel button management command
     button_management_conversation = ConversationHandler(
@@ -1243,10 +1371,11 @@ def register_admin_handlers(application):
     
     application.add_handler(channel_settings_conversation)
     
-    # Follow-up lost command
+    # Follow-up lost (команда и кнопка в админ-меню)
     followup_lost_conversation = ConversationHandler(
         entry_points=[
-            CommandHandler("set_followup_lost", set_followup_lost_command)
+            CommandHandler("set_followup_lost", set_followup_lost_command),
+            CallbackQueryHandler(start_set_followup_lost_callback, pattern="^admin:start_set_followup_lost$"),
         ],
         states={
             AdminButtonStates.WAITING_FOLLOWUP_LOST_TEXT: [
@@ -1259,10 +1388,46 @@ def register_admin_handlers(application):
     )
     application.add_handler(followup_lost_conversation)
 
-    # Welcome settings command
+    # Follow-up lead (команда и кнопка в админ-меню)
+    followup_lead_conversation = ConversationHandler(
+        entry_points=[
+            CommandHandler("set_followup_lead", set_followup_lead_command),
+            CallbackQueryHandler(start_set_followup_lead_callback, pattern="^admin:start_set_followup_lead$"),
+        ],
+        states={
+            AdminButtonStates.WAITING_FOLLOWUP_LEAD_TEXT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, set_followup_lead_text_handler)
+            ],
+            AdminButtonStates.WAITING_FOLLOWUP_LEAD_BTN1_TEXT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, set_followup_lead_btn1_text_handler)
+            ],
+            AdminButtonStates.WAITING_FOLLOWUP_LEAD_BTN1_URL: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, set_followup_lead_btn1_url_handler)
+            ],
+            AdminButtonStates.WAITING_FOLLOWUP_LEAD_BTN2_TEXT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, set_followup_lead_btn2_text_handler)
+            ],
+            AdminButtonStates.WAITING_FOLLOWUP_LEAD_BTN2_URL: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, set_followup_lead_btn2_url_handler)
+            ],
+            AdminButtonStates.WAITING_FOLLOWUP_LEAD_BTN3_TEXT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, set_followup_lead_btn3_text_handler)
+            ],
+            AdminButtonStates.WAITING_FOLLOWUP_LEAD_BTN3_URL: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, set_followup_lead_btn3_url_handler)
+            ],
+        },
+        fallbacks=[
+            CommandHandler("cancel", cancel_channel_command)
+        ],
+    )
+    application.add_handler(followup_lead_conversation)
+
+    # Welcome settings command (и кнопка «Изменить приветствие» в админ-меню)
     welcome_settings_conversation = ConversationHandler(
         entry_points=[
-            CommandHandler("set_welcome", set_welcome_command)
+            CommandHandler("set_welcome", set_welcome_command),
+            CallbackQueryHandler(start_set_welcome_callback, pattern="^admin:start_set_welcome$"),
         ],
         states={
             AdminButtonStates.WAITING_WELCOME_TEXT: [
