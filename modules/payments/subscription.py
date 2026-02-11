@@ -93,13 +93,26 @@ async def check_channel_subscription(bot, telegram_id: int, channel_username: Op
 
         # Проверяем статус участника
         status = member.status
-        
-        # Пользователь подписан если статус MEMBER, ADMINISTRATOR или CREATOR
-        is_subscribed = status in [
+
+        # Разные версии python-telegram-bot/telegram могут по-разному называть статус владельца канала.
+        # В старых версиях мог быть ChatMemberStatus.CREATOR, в новых — ChatMemberStatus.OWNER
+        # или вообще только строковые статусы. Делаем совместимую проверку.
+        allowed_statuses = {
             ChatMemberStatus.MEMBER,
             ChatMemberStatus.ADMINISTRATOR,
-            ChatMemberStatus.CREATOR
-        ]
+        }
+
+        # Добавляем, если такие константы существуют в текущей версии библиотеки
+        creator_status = getattr(ChatMemberStatus, "CREATOR", None)
+        if creator_status is not None:
+            allowed_statuses.add(creator_status)
+
+        owner_status = getattr(ChatMemberStatus, "OWNER", None)
+        if owner_status is not None:
+            allowed_statuses.add(owner_status)
+
+        # Пользователь считается подписанным, если его статус в списке разрешённых
+        is_subscribed = status in allowed_statuses
         
         logger.info(f"User {telegram_id} subscription status: {status} -> {is_subscribed}")
         return is_subscribed
