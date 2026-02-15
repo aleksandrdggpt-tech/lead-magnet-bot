@@ -22,6 +22,8 @@ from .subscription import get_subscription_channel
 from .settings import (
     get_welcome_settings,
     set_welcome_settings,
+    get_followup_enabled,
+    set_followup_enabled,
     get_followup_lost_text,
     set_followup_lost_text,
     get_followup_lead_settings,
@@ -81,9 +83,10 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 Выберите действие ниже:
 """
     
+    followup_on = await get_followup_enabled()
     await update.message.reply_text(
         message,
-        reply_markup=get_admin_panel_keyboard(),
+        reply_markup=get_admin_panel_keyboard(followup_enabled=followup_on),
         parse_mode=ParseMode.MARKDOWN
     )
 
@@ -101,10 +104,40 @@ async def admin_back_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 Выберите действие:
 """
     
+    followup_on = await get_followup_enabled()
     await query.edit_message_text(
         message,
-        reply_markup=get_admin_panel_keyboard(),
+        reply_markup=get_admin_panel_keyboard(followup_enabled=followup_on),
         parse_mode=ParseMode.MARKDOWN
+    )
+
+
+async def admin_toggle_followup_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Переключатель follow-up: вкл/выкл."""
+    query = update.callback_query
+    await query.answer()
+    telegram_id = query.from_user.id
+    if not is_admin(telegram_id):
+        await query.edit_message_text("❌ Нет прав доступа.")
+        return
+    try:
+        async with get_session() as session:
+            current = await get_followup_enabled(session)
+            await set_followup_enabled(session, not current, updated_by=telegram_id)
+        new_state = not current
+    except Exception as e:
+        logger.error(f"Error toggling followup_enabled: {e}")
+        await query.edit_message_text("❌ Ошибка при изменении настройки.")
+        return
+    message = (
+        "🔧 **АДМИН-ПАНЕЛЬ**\n\n"
+        "Follow-up сообщения: **" + ("включены" if new_state else "выключены") + "**.\n\n"
+        "Выберите действие ниже:"
+    )
+    await query.edit_message_text(
+        message,
+        reply_markup=get_admin_panel_keyboard(followup_enabled=new_state),
+        parse_mode=ParseMode.MARKDOWN,
     )
 
 
@@ -1324,6 +1357,7 @@ def register_admin_handlers(application):
     application.add_handler(CallbackQueryHandler(admin_welcome_settings_callback, pattern="^admin:welcome_settings$"))
     application.add_handler(CallbackQueryHandler(admin_followup_lost_settings_callback, pattern="^admin:followup_lost_settings$"))
     application.add_handler(CallbackQueryHandler(admin_followup_lead_settings_callback, pattern="^admin:followup_lead_settings$"))
+    application.add_handler(CallbackQueryHandler(admin_toggle_followup_callback, pattern="^admin:toggle_followup$"))
     
     # Channel button management command
     button_management_conversation = ConversationHandler(

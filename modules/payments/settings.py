@@ -8,9 +8,10 @@ via the generic BotSettings key/value model.
 from __future__ import annotations
 
 import logging
-from typing import TypedDict, Optional, List
+from typing import TypedDict, Optional, List, Any
 
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import BotSettings
 from database.database import get_session
@@ -18,6 +19,85 @@ from config import Config
 
 logger = logging.getLogger(__name__)
 
+
+# ==================== KEY CONSTANTS (single source of truth) ====================
+
+WELCOME_TEXT_KEY = "welcome_text"
+WELCOME_BUTTON_TEXT_KEY = "welcome_btn_text"
+WELCOME_LINK_KEY = "welcome_link"
+
+# Legacy key: в БД мог остаться welcome_button_text
+WELCOME_BUTTON_TEXT_LEGACY_KEY = "welcome_button_text"
+
+FOLLOWUP_ENABLED_KEY = "followup_enabled"
+
+FUP_LOST_TEXT_KEY = "fup_lost_text"
+
+FUP1_LEAD_TEXT_KEY = "fup1_lead_text"
+FUP2_LEAD_TEXT_KEY = "fup2_lead_text"
+FUP3_LEAD_TEXT_KEY = "fup3_lead_text"
+
+DIAG_SELECTION_TEXT_KEY = "diag_selection_text"
+
+DIAG1_BTN_TEXT_KEY = "diag1_price_btn"
+DIAG1_URL_KEY = "diag1_url"
+DIAG2_BTN_TEXT_KEY = "diag2_price_btn"
+DIAG2_URL_KEY = "diag2_url"
+DIAG3_BTN_TEXT_KEY = "diag3_price_btn"
+DIAG3_URL_KEY = "diag3_url"
+
+# Legacy keys (для обратной совместимости с существующими админ-диалогами)
+FOLLOWUP_LOST_TEXT_LEGACY_KEY = "followup_lost_text"
+FOLLOWUP_LEAD_TEXT_KEY = "followup_lead_text"
+FOLLOWUP_LEAD_BTN1_TEXT_KEY = "followup_lead_btn1_text"
+FOLLOWUP_LEAD_BTN1_URL_KEY = "followup_lead_btn1_url"
+FOLLOWUP_LEAD_BTN2_TEXT_KEY = "followup_lead_btn2_text"
+FOLLOWUP_LEAD_BTN2_URL_KEY = "followup_lead_btn2_url"
+FOLLOWUP_LEAD_BTN3_TEXT_KEY = "followup_lead_btn3_text"
+FOLLOWUP_LEAD_BTN3_URL_KEY = "followup_lead_btn3_url"
+
+
+# ==================== GENERIC HELPERS ====================
+
+async def get_setting(
+    session: AsyncSession,
+    key: str,
+    default: str | None = None,
+) -> str | None:
+    """Возвращает значение настройки по ключу из текущей сессии."""
+    result = await session.execute(
+        select(BotSettings).where(BotSettings.key == key)
+    )
+    row = result.scalar_one_or_none()
+    if row and row.value is not None:
+        return row.value
+    return default
+
+
+async def set_setting(
+    session: AsyncSession,
+    key: str,
+    value: str,
+    updated_by: int | None = None,
+) -> None:
+    """Записывает значение настройки в БД (в рамках текущей сессии)."""
+    result = await session.execute(
+        select(BotSettings).where(BotSettings.key == key)
+    )
+    setting = result.scalar_one_or_none()
+    if setting:
+        setting.value = value
+        setting.updated_by = updated_by
+    else:
+        setting = BotSettings(
+            key=key,
+            value=value,
+            updated_by=updated_by,
+        )
+        session.add(setting)
+
+
+# ==================== TYPED DICTS ====================
 
 class WelcomeSettings(TypedDict):
     text: str
@@ -35,61 +115,60 @@ class FollowupLeadSettings(TypedDict):
     buttons: List[FollowupLeadButton]
 
 
-WELCOME_TEXT_KEY = "welcome_text"
-WELCOME_BUTTON_TEXT_KEY = "welcome_button_text"
-WELCOME_LINK_KEY = "welcome_link"
-
-FOLLOWUP_LOST_TEXT_KEY = "followup_lost_text"
-FOLLOWUP_LEAD_TEXT_KEY = "followup_lead_text"
-FOLLOWUP_LEAD_BTN1_TEXT_KEY = "followup_lead_btn1_text"
-FOLLOWUP_LEAD_BTN1_URL_KEY = "followup_lead_btn1_url"
-FOLLOWUP_LEAD_BTN2_TEXT_KEY = "followup_lead_btn2_text"
-FOLLOWUP_LEAD_BTN2_URL_KEY = "followup_lead_btn2_url"
-FOLLOWUP_LEAD_BTN3_TEXT_KEY = "followup_lead_btn3_text"
-FOLLOWUP_LEAD_BTN3_URL_KEY = "followup_lead_btn3_url"
+# Минимальные fallback-значения (без длинных русских текстов; полные — в БД/миграции)
+DEFAULT_WELCOME_TEXT = ""
+DEFAULT_WELCOME_BUTTON_TEXT = ""
 
 
-DEFAULT_WELCOME_TEXT = (
-    "👋 Добро пожаловать!\n\n"
-    "Этот бот выдает полезные материалы по продаже и систематизации работы отдела продаж.\n\n"
-    "Нажмите кнопку ниже, чтобы получить чек‑лист отдела продаж."
-)
+async def _get_welcome_settings(session: AsyncSession) -> dict[str, Any]:
+    """
+    Получает настройки приветствия из БД (в рамках переданной сессии).
+    Поддерживает ключи welcome_btn_text и welcome_button_text (legacy).
+    """
+    keys = [
+        WELCOME_TEXT_KEY,
+        WELCOME_BUTTON_TEXT_KEY,
+        WELCOME_LINK_KEY,
+        WELCOME_BUTTON_TEXT_LEGACY_KEY,
+    ]
+    result = await session.execute(
+        select(BotSettings).where(BotSettings.key.in_(keys))
+    )
+    rows = result.scalars().all()
+    raw: dict[str, str] = {row.key: row.value for row in rows if row.value}
 
-DEFAULT_WELCOME_BUTTON_TEXT = "📋 Получить чек-лист отдела продаж"
+    text = raw.get(WELCOME_TEXT_KEY) or DEFAULT_WELCOME_TEXT
+    button_text = (
+        raw.get(WELCOME_BUTTON_TEXT_KEY)
+        or raw.get(WELCOME_BUTTON_TEXT_LEGACY_KEY)
+        or DEFAULT_WELCOME_BUTTON_TEXT
+    )
+    link = raw.get(WELCOME_LINK_KEY)
+
+    return {"text": text, "button_text": button_text, "link": link}
 
 
-async def get_welcome_settings() -> WelcomeSettings:
+async def get_welcome_settings(
+    session: AsyncSession | None = None,
+) -> dict[str, Any]:
     """
     Получает настройки приветственного сообщения из БД.
-    Если настроек нет, возвращает значения по умолчанию.
+    Если session не передан, открывает свою сессию (для вызовов из bot.py и т.д.).
     """
-    text = DEFAULT_WELCOME_TEXT
-    button_text = DEFAULT_WELCOME_BUTTON_TEXT
-    link: Optional[str] = None
-
+    if session is not None:
+        return await _get_welcome_settings(session)
     try:
-        async with get_session() as session:
-            result = await session.execute(
-                select(BotSettings).where(
-                    BotSettings.key.in_(
-                        [WELCOME_TEXT_KEY, WELCOME_BUTTON_TEXT_KEY, WELCOME_LINK_KEY]
-                    )
-                )
-            )
-            rows = result.scalars().all()
-            for row in rows:
-                if row.key == WELCOME_TEXT_KEY and row.value:
-                    text = row.value
-                elif row.key == WELCOME_BUTTON_TEXT_KEY and row.value:
-                    button_text = row.value
-                elif row.key == WELCOME_LINK_KEY and row.value:
-                    link = row.value
+        async with get_session() as s:
+            return await _get_welcome_settings(s)
     except Exception as e:
         logger.error(f"Error loading welcome settings: {e}")
         import traceback
         logger.error(traceback.format_exc())
-
-    return WelcomeSettings(text=text, button_text=button_text, link=link)
+        return {
+            "text": DEFAULT_WELCOME_TEXT,
+            "button_text": DEFAULT_WELCOME_BUTTON_TEXT,
+            "link": None,
+        }
 
 
 async def set_welcome_settings(
@@ -98,31 +177,16 @@ async def set_welcome_settings(
     link: str,
     updated_by: Optional[int] = None,
 ) -> None:
-    """
-    Сохраняет настройки приветственного сообщения в БД.
-    """
+    """Сохраняет настройки приветственного сообщения в БД."""
     try:
         async with get_session() as session:
             for key, value in (
                 (WELCOME_TEXT_KEY, text),
                 (WELCOME_BUTTON_TEXT_KEY, button_text),
                 (WELCOME_LINK_KEY, link),
+                (WELCOME_BUTTON_TEXT_LEGACY_KEY, button_text),
             ):
-                result = await session.execute(
-                    select(BotSettings).where(BotSettings.key == key)
-                )
-                setting = result.scalar_one_or_none()
-                if setting:
-                    setting.value = value
-                    setting.updated_by = updated_by
-                else:
-                    setting = BotSettings(
-                        key=key,
-                        value=value,
-                        updated_by=updated_by,
-                    )
-                    session.add(setting)
-
+                await set_setting(session, key, value, updated_by)
             await session.commit()
             logger.info("Welcome settings updated")
     except Exception as e:
@@ -131,52 +195,64 @@ async def set_welcome_settings(
         logger.error(traceback.format_exc())
 
 
+# ==================== FOLLOWUP ENABLED ====================
+
+async def get_followup_enabled(session: AsyncSession | None = None) -> bool:
+    """Возвращает, включена ли отправка follow-up сообщений."""
+    if session is not None:
+        val = await get_setting(session, FOLLOWUP_ENABLED_KEY, "1")
+        return (val or "").strip().lower() in ("1", "true", "yes", "вкл")
+    try:
+        async with get_session() as s:
+            return await get_followup_enabled(s)
+    except Exception as e:
+        logger.error(f"Error loading followup_enabled: {e}")
+        return True
+
+
+async def set_followup_enabled(
+    session: AsyncSession,
+    enabled: bool,
+    updated_by: int | None = None,
+) -> None:
+    """Включает или выключает отправку follow-up сообщений."""
+    await set_setting(
+        session,
+        FOLLOWUP_ENABLED_KEY,
+        "1" if enabled else "0",
+        updated_by,
+    )
+
+
 # ==================== FOLLOWUP LOST (НЕ ПОДПИСАН) ====================
 
-DEFAULT_FOLLOWUP_LOST_TEXT = (
-    "👋 Привет! Вчера ты начинал получать чек-лист отдела продаж, но не завершил шаг "
-    "с подпиской на канал.\n\n"
-    "Подпишись на канал, чтобы открыть доступ к материалу, и нажми кнопку ниже, "
-    "чтобы получить чек-лист."
-)
+DEFAULT_FOLLOWUP_LOST_TEXT = ""
 
 
-async def get_followup_lost_text() -> str:
-    """Возвращает текст follow-up сообщения для неподписанных пользователей."""
-    text = DEFAULT_FOLLOWUP_LOST_TEXT
+async def get_followup_lost_text(session: AsyncSession | None = None) -> str:
+    """
+    Возвращает текст follow-up для неподписавшихся.
+    Поддерживает ключи fup_lost_text и followup_lost_text (legacy).
+    """
+    if session is not None:
+        text = await get_setting(session, FUP_LOST_TEXT_KEY)
+        if not text:
+            text = await get_setting(session, FOLLOWUP_LOST_TEXT_LEGACY_KEY)
+        return (text or "").strip() or DEFAULT_FOLLOWUP_LOST_TEXT
     try:
-        async with get_session() as session:
-            result = await session.execute(
-                select(BotSettings).where(BotSettings.key == FOLLOWUP_LOST_TEXT_KEY)
-            )
-            setting = result.scalar_one_or_none()
-            if setting and setting.value:
-                text = setting.value
+        async with get_session() as s:
+            return await get_followup_lost_text(s)
     except Exception as e:
         logger.error(f"Error loading followup_lost_text: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-    return text
+        return DEFAULT_FOLLOWUP_LOST_TEXT
 
 
 async def set_followup_lost_text(text: str, updated_by: Optional[int] = None) -> None:
-    """Сохраняет текст follow-up сообщения для неподписанных пользователей."""
+    """Сохраняет текст follow-up для неподписанных (пишет в оба ключа для совместимости)."""
     try:
         async with get_session() as session:
-            result = await session.execute(
-                select(BotSettings).where(BotSettings.key == FOLLOWUP_LOST_TEXT_KEY)
-            )
-            setting = result.scalar_one_or_none()
-            if setting:
-                setting.value = text
-                setting.updated_by = updated_by
-            else:
-                setting = BotSettings(
-                    key=FOLLOWUP_LOST_TEXT_KEY,
-                    value=text,
-                    updated_by=updated_by,
-                )
-                session.add(setting)
+            await set_setting(session, FUP_LOST_TEXT_KEY, text, updated_by)
+            await set_setting(session, FOLLOWUP_LOST_TEXT_LEGACY_KEY, text, updated_by)
             await session.commit()
             logger.info("Followup lost text updated")
     except Exception as e:
@@ -185,7 +261,98 @@ async def set_followup_lost_text(text: str, updated_by: Optional[int] = None) ->
         logger.error(traceback.format_exc())
 
 
-# ==================== FOLLOWUP LEAD (ПОДПИСАН) ====================
+# ==================== FOLLOWUP TEXTS (FUP1, FUP2, FUP3) ====================
+
+async def get_followup_texts(session: AsyncSession | None = None) -> dict[str, str]:
+    """
+    Возвращает тексты трёх follow-up сообщений для подписавшихся:
+    fup1_text, fup2_text, fup3_text.
+    """
+    keys = [FUP1_LEAD_TEXT_KEY, FUP2_LEAD_TEXT_KEY, FUP3_LEAD_TEXT_KEY]
+
+    async def _get(s: AsyncSession) -> dict[str, str]:
+        result = await s.execute(
+            select(BotSettings).where(BotSettings.key.in_(keys))
+        )
+        rows = result.scalars().all()
+        raw = {row.key: (row.value or "").strip() for row in rows}
+        return {
+            "fup1_text": raw.get(FUP1_LEAD_TEXT_KEY) or "",
+            "fup2_text": raw.get(FUP2_LEAD_TEXT_KEY) or "",
+            "fup3_text": raw.get(FUP3_LEAD_TEXT_KEY) or "",
+        }
+
+    if session is not None:
+        return await _get(session)
+    try:
+        async with get_session() as s:
+            return await _get(s)
+    except Exception as e:
+        logger.error(f"Error loading followup texts: {e}")
+        return {"fup1_text": "", "fup2_text": "", "fup3_text": ""}
+
+
+# ==================== DIAG SELECTION (2.2.2) ====================
+
+async def get_diag_selection_settings(
+    session: AsyncSession | None = None,
+) -> dict[str, Any]:
+    """
+    Возвращает настройки экрана «Выбор типа диагностики»:
+    text, diag1: {btn_text, url}, diag2: {btn_text, url}, diag3: {btn_text, url}.
+    """
+    keys = [
+        DIAG_SELECTION_TEXT_KEY,
+        DIAG1_BTN_TEXT_KEY,
+        DIAG1_URL_KEY,
+        DIAG2_BTN_TEXT_KEY,
+        DIAG2_URL_KEY,
+        DIAG3_BTN_TEXT_KEY,
+        DIAG3_URL_KEY,
+    ]
+
+    async def _get(s: AsyncSession) -> dict[str, Any]:
+        result = await s.execute(
+            select(BotSettings).where(BotSettings.key.in_(keys))
+        )
+        rows = result.scalars().all()
+        raw = {row.key: (row.value or "").strip() for row in rows}
+        # Fallback URL из конфига, если в БД пусто
+        def url(k: str, env_url: str) -> str:
+            return raw.get(k) or env_url or ""
+
+        return {
+            "text": raw.get(DIAG_SELECTION_TEXT_KEY) or "",
+            "diag1": {
+                "btn_text": raw.get(DIAG1_BTN_TEXT_KEY) or "Диагностика 1",
+                "url": url(DIAG1_URL_KEY, getattr(Config, "PAYMENT_URL_1", "") or ""),
+            },
+            "diag2": {
+                "btn_text": raw.get(DIAG2_BTN_TEXT_KEY) or "Диагностика 2",
+                "url": url(DIAG2_URL_KEY, getattr(Config, "PAYMENT_URL_2", "") or ""),
+            },
+            "diag3": {
+                "btn_text": raw.get(DIAG3_BTN_TEXT_KEY) or "Диагностика 3",
+                "url": url(DIAG3_URL_KEY, getattr(Config, "PAYMENT_URL_3", "") or ""),
+            },
+        }
+
+    if session is not None:
+        return await _get(session)
+    try:
+        async with get_session() as s:
+            return await _get(s)
+    except Exception as e:
+        logger.error(f"Error loading diag selection settings: {e}")
+        return {
+            "text": "",
+            "diag1": {"btn_text": "Диагностика 1", "url": ""},
+            "diag2": {"btn_text": "Диагностика 2", "url": ""},
+            "diag3": {"btn_text": "Диагностика 3", "url": ""},
+        }
+
+
+# ==================== FOLLOWUP LEAD (ПОДПИСАН) — legacy admin ====================
 
 DEFAULT_FOLLOWUP_LEAD_TEXT = (
     "🔥 **Как использовать чек-лист, чтобы выжать максимум из отдела продаж**\n\n"

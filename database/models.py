@@ -6,7 +6,7 @@ Channel button tracking models.
 from datetime import datetime
 from typing import Optional, TYPE_CHECKING
 from sqlalchemy import (
-    Integer, BigInteger, String, ForeignKey, DateTime
+    Integer, BigInteger, String, Text, ForeignKey, DateTime
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -71,7 +71,7 @@ class BotSettings(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     key: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
-    value: Mapped[str] = mapped_column(String(500), nullable=False)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     updated_by: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)  # Telegram ID админа
 

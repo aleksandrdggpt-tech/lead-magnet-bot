@@ -20,8 +20,11 @@ from .messages import get_free_access_message
 from .keyboards import get_free_access_keyboard
 from .settings import (
     get_welcome_settings,
+    get_followup_enabled,
     get_followup_lost_text,
     get_followup_lead_settings,
+    get_followup_texts,
+    get_diag_selection_settings,
 )
 from config import Config
 
@@ -155,6 +158,55 @@ async def check_subscription_callback(update: Update, context: ContextTypes.DEFA
                 logger.error(f"Error sending error message: {e2}")
 
 
+async def followup_choose_diagnostic_callback(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """
+    Обработчик кнопки «Выбрать тип диагностики».
+    Отправляет сообщение с текстом выбора диагностики и тремя кнопками (текст + url из настроек).
+    """
+    query = update.callback_query
+    try:
+        await query.answer()
+    except Exception as e:
+        logger.error(f"Error answering callback (choose_diagnostic): {e}")
+
+    try:
+        settings = await get_diag_selection_settings()
+        text = (settings.get("text") or "").strip()
+        if not text:
+            text = "Выберите тип диагностики:"
+
+        buttons = []
+        for key in ("diag1", "diag2", "diag3"):
+            diag = settings.get(key) or {}
+            btn_text = (diag.get("btn_text") or "").strip()
+            url = (diag.get("url") or "").strip()
+            if url and btn_text:
+                buttons.append([InlineKeyboardButton(btn_text, url=url)])
+        keyboard = InlineKeyboardMarkup(buttons) if buttons else None
+
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=text,
+            reply_markup=keyboard,
+            parse_mode="Markdown",
+        )
+        logger.info(f"Sent diag selection to user {update.effective_user.id}")
+    except Exception as e:
+        logger.error(f"Error in followup_choose_diagnostic_callback: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        try:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="Произошла ошибка. Попробуйте позже.",
+            )
+        except Exception:
+            pass
+
+
 def register_subscription_handlers(application):
     """Register subscription handlers."""
     application.add_handler(
@@ -167,6 +219,12 @@ def register_subscription_handlers(application):
         CallbackQueryHandler(
             welcome_get_checklist_callback,
             pattern="^welcome:get_checklist$",
+        )
+    )
+    application.add_handler(
+        CallbackQueryHandler(
+            followup_choose_diagnostic_callback,
+            pattern="^followup:choose_diagnostic$",
         )
     )
     logger.info("✅ Subscription handlers registered")
@@ -200,7 +258,7 @@ async def welcome_get_checklist_callback(
             )
             return
 
-        # Логируем пользователя и нажатие кнопки, а также планируем follow-up
+        # Логируем пользователя и нажатие кнопки; планируем follow-up только если включён
         async with get_session() as session:
             user = await get_or_create_user(
                 telegram_id,
@@ -217,8 +275,8 @@ async def welcome_get_checklist_callback(
             )
             session.add(click)
             await session.commit()
-
-        schedule_lead_followup(context, telegram_id)
+            if await get_followup_enabled(session):
+                schedule_lead_followup_chain(context, telegram_id)
 
         # Проверяем подписку
         try:
@@ -257,9 +315,9 @@ async def welcome_get_checklist_callback(
                     )
             return
 
-        # Пользователь подписан - выдаем ссылку на чек-лист
+        # Пользователь подписан — выдаём ссылку на чек-лист (текст и кнопка из настроек)
         keyboard = InlineKeyboardMarkup(
-            [[InlineKeyboardButton("🔗 Получить чек-лист", url=welcome["link"])]]
+            [[InlineKeyboardButton(welcome["button_text"], url=welcome["link"])]]
         )
         success_message = """
 ✅ **ПОДПИСКА ПОДТВЕРЖДЕНА!**
@@ -294,53 +352,70 @@ async def welcome_get_checklist_callback(
                 logger.error(f"Error sending error message (welcome): {e2}")
 
 
-def schedule_lead_followup(context: ContextTypes.DEFAULT_TYPE, telegram_id: int) -> None:
+def schedule_lead_followup_chain(
+    context: ContextTypes.DEFAULT_TYPE,
+    telegram_id: int,
+) -> None:
     """
-    Планирует follow-up сообщение на следующий день в заданный час.
+    Планирует цепочку из трёх follow-up сообщений: день+1 (fup1), день+2 (fup2), день+3 (fup3).
     """
     try:
         job_queue = context.application.job_queue
+        if not job_queue:
+            logger.warning("Job queue not available, skip scheduling follow-up chain")
+            return
 
         now = datetime.now(timezone.utc)
-        target_time = dtime(hour=Config.FOLLOWUP_HOUR, minute=0, second=0)
-        target = now.replace(
-            hour=target_time.hour,
-            minute=target_time.minute,
-            second=target_time.second,
-            microsecond=0,
-        )
-        if target <= now:
-            target += timedelta(days=1)
+        base_time = dtime(hour=Config.FOLLOWUP_HOUR, minute=0, second=0)
+        ts = int(now.timestamp())
 
-        job_queue.run_once(
-            send_lead_followup_job,
-            when=target,
-            chat_id=telegram_id,
-            name=f"lead_followup_{telegram_id}_{int(now.timestamp())}",
-        )
-        logger.info(f"Lead follow-up scheduled for user {telegram_id} at {target.isoformat()}")
+        for day_offset in (1, 2, 3):
+            target = now.replace(
+                hour=base_time.hour,
+                minute=base_time.minute,
+                second=base_time.second,
+                microsecond=0,
+            ) + timedelta(days=day_offset)
+            if target <= now:
+                target += timedelta(days=1)
+
+            job_queue.run_once(
+                send_lead_followup_job,
+                when=target,
+                chat_id=telegram_id,
+                name=f"lead_followup_{telegram_id}_{day_offset}_{ts}",
+                data={"step": day_offset},
+            )
+            logger.info(
+                f"Lead follow-up step {day_offset} scheduled for user {telegram_id} at {target.isoformat()}"
+            )
     except Exception as e:
-        logger.error(f"Error scheduling lead follow-up for user {telegram_id}: {e}")
+        logger.error(f"Error scheduling follow-up chain for user {telegram_id}: {e}")
         import traceback
-
         logger.error(f"Traceback: {traceback.format_exc()}")
 
 
 async def send_lead_followup_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     """
-    Follow-up сообщение через день после нажатия на кнопку лид-магнита.
+    Одно из follow-up сообщений цепочки (шаг 1, 2 или 3).
 
-    Два сценария:
-    1) Пользователь подписан на канал — отправляем продающий текст + 3 кнопки оплаты.
-    2) Не подписан — повторно предлагаем получить лид-магнит с кнопкой, как в приветствии.
+    Сначала проверяет followup_enabled; затем подписку.
+    Подписан: отправляет текст fup1/fup2/fup3 из настроек + кнопку «Выбрать тип диагностики».
+    Не подписан: текст fup_lost + кнопка приветствия.
     """
     telegram_id = context.job.chat_id
+    job_data = context.job.data or {}
+    step = job_data.get("step", 1)
 
     try:
+        async with get_session() as session:
+            if not await get_followup_enabled(session):
+                logger.info(f"Follow-up disabled, skip job for user {telegram_id}")
+                return
+
         channel_username = await get_subscription_channel()
         welcome = await get_welcome_settings()
 
-        # Проверяем подписку
         try:
             is_subscribed = await check_channel_subscription(
                 context.bot, telegram_id, channel_username
@@ -348,55 +423,45 @@ async def send_lead_followup_job(context: ContextTypes.DEFAULT_TYPE) -> None:
         except Exception as e:
             logger.error(f"Error checking subscription in follow-up for {telegram_id}: {e}")
             import traceback
-
             logger.error(f"Traceback: {traceback.format_exc()}")
             return
 
         if is_subscribed:
-            # Сценарий 1: подписан — продающее сообщение + кнопки оплаты из настроек
-            lead_settings = await get_followup_lead_settings()
-            if not lead_settings["buttons"]:
-                logger.warning("No follow-up lead buttons configured, skipping message")
+            texts = await get_followup_texts()
+            key = f"fup{step}_text"
+            text = (texts.get(key) or "").strip()
+            if not text:
+                logger.warning(f"No {key} configured, skipping follow-up step {step} for {telegram_id}")
                 return
 
-            keyboard = InlineKeyboardMarkup(
-                [
-                    [InlineKeyboardButton(btn["text"], url=btn["url"])]
-                    for btn in lead_settings["buttons"]
-                ]
-            )
-            text = lead_settings["text"]
-
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("Выбрать тип диагностики", callback_data="followup:choose_diagnostic")]
+            ])
             await context.bot.send_message(
                 chat_id=telegram_id,
                 text=text,
                 reply_markup=keyboard,
                 parse_mode="Markdown",
             )
-            logger.info(f"Sent subscribed follow-up to user {telegram_id}")
+            logger.info(f"Sent follow-up step {step} to user {telegram_id}")
         else:
-            # Сценарий 2: не подписан — повторное предложение получить лид-магнит
             reminder_text = await get_followup_lost_text()
-            keyboard = InlineKeyboardMarkup(
+            keyboard = InlineKeyboardMarkup([
                 [
-                    [
-                        InlineKeyboardButton(
-                            welcome["button_text"],
-                            callback_data="welcome:get_checklist",
-                        )
-                    ]
+                    InlineKeyboardButton(
+                        welcome["button_text"],
+                        callback_data="welcome:get_checklist",
+                    )
                 ]
-            )
-
+            ])
             await context.bot.send_message(
                 chat_id=telegram_id,
                 text=reminder_text,
                 reply_markup=keyboard,
                 parse_mode="Markdown",
             )
-            logger.info(f"Sent unsubscribed follow-up to user {telegram_id}")
+            logger.info(f"Sent unsubscribed follow-up step {step} to user {telegram_id}")
     except Exception as e:
         logger.error(f"Unexpected error in send_lead_followup_job for {telegram_id}: {e}")
         import traceback
-
         logger.error(f"Traceback: {traceback.format_exc()}")
